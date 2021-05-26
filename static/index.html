@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Helm Chart Debugger</title>
+    <style>
+      .app {
+        font: 14px/1.4 sans-serif;
+        position: fixed;
+        left: 0;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        display: flex;
+      }
+      .app > div {
+        width: 33%;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+      }
+      .app > div > textarea {
+        flex: 1;
+        font-family: monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <div>
+        <div><strong>template.yaml</strong></div>
+        <textarea class="form-control" id="templateYaml"></textarea>
+      </div>
+      <div>
+        <div><strong>values.yaml</strong></div>
+        <textarea class="form-control" id="valuesYaml"></textarea>
+      </div>
+      <div>
+        <div><strong>result</strong></div>
+        <textarea readonly class="form-control" id="result"></textarea>
+      </div>
+    </div>
+    <script>
+      const templateYaml = document.querySelector('#templateYaml');
+      const valuesYaml = document.querySelector('#valuesYaml');
+      const result = document.querySelector('#result');
+
+      templateYaml.value = `
+---
+apiVersion: apps/v1
+{{ if eq .Values.applicationType "deployment" -}}
+kind: Deployment
+{{ else if eq .Values.applicationType "statefulSet" -}}
+kind: StatefulSet
+{{ end -}}
+metadata:
+  name: {{ .Values.applicationId | quote }}
+  labels:
+    applicationId: {{ .Values.applicationId | quote }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      applicationId: {{ .Values.applicationId | quote }}
+  template:
+    metadata:
+      labels:
+        applicationId: {{ .Values.applicationId | quote }}
+    spec:
+      containers:
+      - name: {{ .Values.applicationId | quote }}
+        image: {{ .Values.image | quote }}
+        resources:
+          limits:
+            memory: "{{ .Values.memoryMb }}Mi"
+            cpu: "{{ .Values.milliCpu }}m"
+          requests:
+            memory: "{{ .Values.memoryMb }}Mi"
+            cpu: "{{ .Values.milliCpu }}m"
+{{- if not (empty .Values.environmentVariables) }}
+        envFrom:
+        - configMapRef:
+            name: {{ .Values.applicationId | quote }}
+{{- end }}
+{{- if not (empty .Values.volumeMounts) }}
+        volumeMounts:
+{{- range $volumeMount := .Values.volumeMounts }}
+        - mountPath: {{ $volumeMount.mountPath | quote }}
+          name: {{ $volumeMount.volumeId | quote }}
+{{- end }}
+{{- end }}
+{{- if not (empty .Values.volumeMounts) }}
+      volumes:
+{{- range $volumeMount := .Values.volumeMounts }}
+      - name: {{ $volumeMount.volumeId | quote }}
+        persistentVolumeClaim:
+          claimName: {{ $volumeMount.volumeId | quote }}
+{{- end }}
+{{- end }}
+      `.trim();
+
+      valuesYaml.value = `
+applicationType: deployment
+applicationId: "foobar applicationId"
+image: "foobar image"
+memoryMb: 100
+milliCpu: 100
+environmentVariables:
+- {}
+volumeMounts:
+- volumeId: foobar-volume-123
+  mountPath: /var/data
+      `.trim();
+
+      generate();
+      templateYaml.addEventListener('blur', generate);
+      valuesYaml.addEventListener('blur', generate);
+
+      function generate() {
+        const body = `### TEMPLATE ###\n${templateYaml.value}\n### VALUES ###\n${valuesYaml.value}`;
+        fetch('/generate', {
+          method: 'POST',
+          body,
+        })
+          .then((response) => response.text())
+          .then((data) => {
+            result.value = data;
+          });
+      }
+    </script>
+  </body>
+</html>
