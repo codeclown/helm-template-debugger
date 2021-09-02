@@ -1,12 +1,10 @@
 package main
 
 import (
-	"bufio"
-	"io/ioutil"
+	"bytes"
+	"fmt"
 	"log"
-	"net/http"
-	"os"
-	"strings"
+	"syscall/js"
 	"text/template"
 
 	"github.com/Masterminds/sprig"
@@ -19,61 +17,42 @@ type NestedValues struct {
 	Values Values
 }
 
-func GenerateHandler(w http.ResponseWriter, r *http.Request) {
-	body, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		log.Printf("error reading body: %v", err)
-		http.Error(w, "can't read body", http.StatusBadRequest)
-		return
-	}
-
-	valuesString := ""
-	templateString := ""
-	current := ""
-
-	scanner := bufio.NewScanner(strings.NewReader(string(body)))
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "### VALUES ###" {
-			current = "values"
-		} else if line == "### TEMPLATE ###" {
-			current = "template"
-		} else if current == "values" {
-			valuesString += line + "\n"
-		} else if current == "template" {
-			templateString += line + "\n"
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		log.Printf("error processing body: %v", err)
-		http.Error(w, "can't read body", http.StatusBadRequest)
-		return
-	}
-
+func generateYaml(templateYaml string, valuesYaml string) (string, error) {
 	valuesData := Values{}
-	err = yaml.Unmarshal([]byte(valuesString), &valuesData)
-	if err := scanner.Err(); err != nil {
-		log.Printf("error parsing values: %v", err)
-		http.Error(w, "error parsing values", http.StatusBadRequest)
-		return
+	if err := yaml.Unmarshal([]byte(valuesYaml), &valuesData); err != nil {
+		return "", err
 	}
 
 	asd := NestedValues{valuesData}
 
-	t := template.Must(template.New("template").Funcs(sprig.TxtFuncMap()).Parse(templateString))
-	if err := t.Execute(w, asd); err != nil {
+	var output bytes.Buffer
+
+	t := template.Must(template.New("template").Funcs(sprig.TxtFuncMap()).Parse(templateYaml))
+	if err := t.Execute(&output, asd); err != nil {
 		log.Println("executing template:", err)
 	}
 
-	// fmt.Fprintf(w, "--- Values: %s\n\n--- Template: %s", valuesString, templateString)
+	return output.String(), nil
+}
+
+func generateWrapper() js.Func {
+	return js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		if len(args) != 2 {
+			return "Invalid no of arguments passed"
+		}
+		templateYaml := args[0].String()
+		valuesYaml := args[1].String()
+		generatedYaml, err := generateYaml(templateYaml, valuesYaml)
+		if err != nil {
+			fmt.Printf("error from generate: %s\n", err)
+			return err.Error()
+		}
+		return generatedYaml
+	})
 }
 
 func main() {
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-	http.Handle("/", http.FileServer(http.Dir("./static")))
-	http.HandleFunc("/generate", GenerateHandler)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+	fmt.Println("Go Web Assembly")
+	js.Global().Set("generateYaml", generateWrapper())
+	<-make(chan bool)
 }
